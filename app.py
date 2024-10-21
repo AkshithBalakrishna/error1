@@ -259,10 +259,10 @@
 
 # ------------------
 
-# combined_app.py
 import streamlit as st
 import requests
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
 import json
@@ -271,6 +271,7 @@ from dotenv import load_dotenv
 from typing import Dict
 import threading
 import uvicorn
+import logging
 
 # Load environment variables
 load_dotenv()
@@ -279,8 +280,20 @@ genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 # FastAPI app initialization
 app = FastAPI()
 
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Change to your allowed origins for security
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # In-memory store for responses
 responses: Dict[str, str] = {}
+
+# Logging configuration
+logging.basicConfig(level=logging.INFO)
 
 # Define the request body for error message submission
 class ErrorMessage(BaseModel):
@@ -288,18 +301,12 @@ class ErrorMessage(BaseModel):
 
 # Function to get response from the Gemini model
 def get_gemini_response(input_text: str) -> str:
-    model = genai.GenerativeModel('gemini-pro')
-    response = model.generate_content(input_text)
-    return response.text
-
-
-# Function to check if the response is valid JSON
-def is_json(response: str) -> bool:
     try:
-        json.loads(response)
-        return True
-    except ValueError:
-        return False
+        model = genai.GenerativeModel('gemini-pro')
+        response = model.generate_content(input_text)
+        return response.text
+    except Exception as e:
+        return f"Error generating response: {str(e)}"
 
 # Input prompt template for error analysis
 input_prompt = """
@@ -321,7 +328,6 @@ As an expert in API troubleshooting and code debugging, your role is to analyze 
 9. Be prepared to explain API concepts, HTTP methods, status codes, and common programming concepts as needed.
 10. If the error seems unique or complex, provide resources for further research or suggest escalation paths.
 
-
 Error details:
 {input_text}
 
@@ -339,9 +345,11 @@ Please provide a comprehensive analysis and solution in this format:
 # API to handle POST requests from SAP CPI
 @app.post("/api/error")
 def receive_error(error_message: ErrorMessage):
+    logging.info(f"Received error message: {error_message.error_message}")
     response_text = get_gemini_response(input_prompt.format(input_text=error_message.error_message))
     response_id = f"response_{len(responses) + 1}"
     responses[response_id] = response_text
+    logging.info(f"Response generated for ID: {response_id}")
     return {"response_id": response_id}
 
 # API to retrieve responses based on ID
@@ -354,7 +362,8 @@ def get_response(response_id: str):
 
 # Function to start FastAPI server in a background thread
 def run_fastapi():
-    uvicorn.run(app, host="0.0.0.0", port=8000)  # Updated to run on port 8000
+    port = int(os.getenv("PORT", 8000))  # Use Render's PORT variable
+    uvicorn.run(app, host="0.0.0.0", port=port)
 
 # Start FastAPI server in a separate thread
 fastapi_thread = threading.Thread(target=run_fastapi, daemon=True)
@@ -372,8 +381,8 @@ submit = st.button("Analyze")
 
 # Error analysis logic
 if submit and user_input:
-    # Send the error message to FastAPI
-    url = "http://localhost:8000/api/error"  # Updated to point to FastAPI on port 8000
+    # Update to your deployed FastAPI URL
+    url = "https://your-fastapi-url.onrender.com/api/error"  # Replace with actual URL
     try:
         response = requests.post(url, json={"error_message": user_input})
         if response.status_code == 200:
